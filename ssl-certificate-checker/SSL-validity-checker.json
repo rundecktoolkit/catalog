@@ -1,0 +1,62 @@
+[ {
+  "defaultTab" : "nodes",
+  "description" : "[![GenAI Documentation](https://img.shields.io/badge/GenAI%20Documentation-green)](https://img.shields.io/badge/GenAI%20Documentation-green)\n\n\n**Description**\n\n**Name:** Validity Check for External SSL Certificates\n\n**Author:** \n\nThis Automation Job checks the validity of external SSL certificates for a list of websites and sends alerts to PagerDuty if the certificates are nearing expiration or if there are any issues.\n\n**Prerequisites**\n\n- Ensure that `openssl` and `curl` are installed on the machine where this job will run.\n- The `PAGERDUTY_INTEGRATION_KEY` environment variable must be set for sending alerts to PagerDuty.\n\n**Options**\n\n| Name         | Description                                                          | Default |\n|--------------|----------------------------------------------------------------------|---------|\n| `days`       | How many days to leave grace before considering \"at risk\"            | 7       |\n| `routing_key`| Route the Event to PagerDuty                                         |         |\n\n**Steps**\n\n- Read the list of websites from the provided file.\n- For each website:\n  - Check the SSL certificate expiration date.\n  - If the certificate is within the threshold days, send a warning event to PagerDuty.\n  - If the certificate check fails or the certificate date format is invalid, send an error event to PagerDuty.\n\n**Disclaimer**\n\nThis document and the described automation job are provided \"as is\" without warranty of any kind, express or implied. The user assumes all risks associated with the use of this job. The creators or contributors are not liable for any direct, indirect, incidental, special, exemplary, or consequential damages (including, but not limited to, procurement of substitute goods or services; loss of use, data, or profits; or business interruption) caused and on any theory of liability, whether in contract, strict liability, or tort (including negligence or otherwise) arising in any way out of the use of this job, even if advised of the possibility of such damage.",
+  "executionEnabled" : true,
+  "group" : "🟩 Remote Location Operations Automation/Security",
+  "id" : "0abaa163-5d6f-4adc-8ef2-aa7c3eff907f",
+  "loglevel" : "INFO",
+  "name" : "Validity Check for External SSL Certificates",
+  "nodeFilterEditable" : false,
+  "options" : [ {
+    "description" : "How many days to leave grace before considering \"at risk\"",
+    "label" : "Threshold Days: ",
+    "name" : "days",
+    "value" : "7"
+  }, {
+    "description" : "Route the Event to PagerDuty",
+    "label" : "PagerDuty Routing Key",
+    "name" : "routing_key",
+    "secure" : true,
+    "storagePath" : "keys/project/global-production/Travelduty_Routing_key",
+    "valueExposed" : true
+  } ],
+  "plugins" : {
+    "ExecutionLifecycle" : { }
+  },
+  "runnerSelector" : {
+    "filter" : "US-EAST",
+    "runnerFilterMode" : "TAGS",
+    "runnerFilterType" : "TAG_FILTER_AND"
+  },
+  "scheduleEnabled" : true,
+  "schedules" : [ ],
+  "sequence" : {
+    "commands" : [ {
+      "args" : "website",
+      "description" : "Website List - (Line Separated, Use this UI to edit) - Could equally be stored in SCM.",
+      "interpreterArgsQuoted" : false,
+      "script" : "harrods.com\nbbc.co.uk\ntesco.com\nhsbc.co.uk\nstandardchartered.com\nbarclays.co.uk\nrbs.com\nsantander.co.uk\nlloydsbank.com\nroyalmail.com\nbt.com\nvodafone.com\nsky.com\nvirginmedia.com\no2.co.uk\nee.co.uk\nbritishgas.co.uk\nscottishpower.co.uk\nnpower.com\njaguarlandrover.com\neasyjet.com\nbritishairways.com\ndiageo.com\nunilever.co.uk\njohnlewis.com\nnationalgrid.com\nshell.co.uk\nbupa.co.uk\nkpmg.co.uk\npwc.co.uk\n",
+      "scriptInterpreter" : "\\cp -fR"
+    }, {
+      "description" : "Execute check for each website.",
+      "plugins" : {
+        "LogFilter" : [ {
+          "config" : {
+            "captureMultipleKeysValues" : "false",
+            "hideOutput" : "false",
+            "logData" : "true",
+            "name" : "output",
+            "regex" : "(.*)"
+          },
+          "type" : "key-value-data-multilines"
+        } ]
+      },
+      "script" : "#!/bin/bash\n\n# Configuration Variables\nTIMEOUT=2                      # Timeout duration in seconds for each check\nDOMAINS=\"website\"              # Path to the file containing list of domains\nDAYS=\"@option.days@\"    # Threshold in days for certificate expiration warnings\n\n# PagerDuty Configuration\n# Ensure you have set the PAGERDUTY_INTEGRATION_KEY environment variable\n# Example: export PAGERDUTY_INTEGRATION_KEY=\"your_integration_key_here\"\n\nPAGERDUTY_API_URL=\"https://events.pagerduty.com/v2/enqueue\"\nPAGERDUTY_INTEGRATION_KEY=\"@option.routing_key@\"\n\n# Function to send an event to PagerDuty\nsend_pagerduty_event() {\n    local TARGET=\"$1\"\n    local SEVERITY=\"$2\"   # \"warning\" or \"error\"\n    local DESCRIPTION=\"$3\"\n\n    # Check if the Integration Key is set\n    if [[ -z \"$PAGERDUTY_INTEGRATION_KEY\" ]]; then\n        echo \"⚠️ PagerDuty Integration Key not set. Skipping alert for $TARGET.\"\n        return\n    fi\n\n    # Construct the JSON payload\n    read -r -d '' payload <<EOF\n{\n  \"routing_key\": \"${PAGERDUTY_INTEGRATION_KEY}\",\n  \"event_action\": \"trigger\",\n  \"payload\": {\n    \"summary\": \"${DESCRIPTION}\",\n    \"source\": \"${TARGET}\",\n    \"severity\": \"${SEVERITY}\",\n    \"component\": \"SSL Certificate Monitor\",\n    \"group\": \"SSL Certificates\",\n    \"class\": \"Certificate Expiration\",\n    \"custom_details\": {\n      \"domain\": \"${TARGET}\",\n      \"severity\": \"${SEVERITY}\",\n      \"description\": \"${DESCRIPTION}\"\n    }\n  }\n}\nEOF\n\n    # Send the event using curl\n    response=$(curl -s -w \"%{http_code}\" -o /dev/null -X POST \"$PAGERDUTY_API_URL\" \\\n        -H \"Content-Type: application/json\" \\\n        -d \"$payload\")\n\n    if [ \"$response\" -ne 202 ]; then\n        echo \"⚠️ Failed to send PagerDuty event for $TARGET (HTTP status: $response)\"\n    else\n        echo \"✅ PagerDuty event sent for $TARGET\"\n    fi\n}\n\n# Verify that the DOMAINS file exists and is readable\nif [[ ! -f \"$DOMAINS\" || ! -r \"$DOMAINS\" ]]; then\n    echo \"Error: Domains file '$DOMAINS' not found or not readable.\"\n    exit 1\nfi\n\n# Main loop to process each domain\nwhile IFS= read -r TARGET || [[ -n \"$TARGET\" ]]; do\n    # Skip empty lines and lines starting with #\n    [[ -z \"$TARGET\" || \"$TARGET\" =~ ^# ]] && continue\n\n    # Use timeout to limit the execution time of the SSL check\n    cert_info=$(timeout \"${TIMEOUT}\" bash -c \"echo | openssl s_client -connect '${TARGET}:443' -servername '${TARGET}' 2>/dev/null | openssl x509 -noout -dates\")\n\n    # Check if the timeout occurred or if cert_info is empty\n    if [[ $? -ne 0 || -z \"$cert_info\" ]]; then\n        echo \"❌ $TARGET - Failed (timeout after ${TIMEOUT}s)\"\n        # Send a PagerDuty error event\n        send_pagerduty_event \"$TARGET\" \"error\" \"SSL certificate check failed for $TARGET (timeout after ${TIMEOUT}s)\"\n        continue\n    fi\n\n    # Extract the 'notAfter' date from the certificate\n    expirationdate=$(echo \"$cert_info\" | grep 'notAfter=' | cut -d= -f2)\n\n    # Convert the expiration date to epoch time\n    expiration_epoch=$(date -d \"$expirationdate\" '+%s' 2>/dev/null)\n\n    # Validate the extracted date\n    if [[ -z \"$expiration_epoch\" ]]; then\n        echo \"❌ $TARGET - Invalid certificate date format\"\n        # Send a PagerDuty error event\n        send_pagerduty_event \"$TARGET\" \"error\" \"SSL certificate check failed for $TARGET (invalid date format)\"\n        continue\n    fi\n\n    # Get current epoch time\n    current_epoch=$(date +%s)\n\n    # Calculate threshold epoch time\n    threshold_epoch=$((current_epoch + 86400 * DAYS))\n\n    # Compare expiration date with the threshold\n    if [ \"$expiration_epoch\" -le \"$threshold_epoch\" ]; then\n        echo \"🟨 $TARGET - Certificate expires on $(date -d @\"$expiration_epoch\" '+%Y-%m-%d')\"\n        # Send a PagerDuty warning event\n        send_pagerduty_event \"$TARGET\" \"warning\" \"SSL certificate for $TARGET expires on $(date -d @\"$expiration_epoch\" '+%Y-%m-%d')\"\n    else\n        echo \"🟩 $TARGET - Certificate valid until $(date -d @\"$expiration_epoch\" '+%Y-%m-%d')\"\n    fi\n\ndone < \"$DOMAINS\"\n\n"
+    } ],
+    "keepgoing" : false,
+    "strategy" : "node-first"
+  },
+  "tags" : "security",
+  "user" : "Craig Hobbs",
+  "uuid" : "0abaa163-5d6f-4adc-8ef2-aa7c3eff907f"
+} ]
